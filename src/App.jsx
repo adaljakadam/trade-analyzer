@@ -6,17 +6,12 @@ import {
   TrendingDown, 
   Activity, 
   AlertCircle, 
-  Calendar as CalendarIcon,
+  Calendar as CalendarIcon, 
   DollarSign,
-  Clock,
-  ChevronLeft,
-  ChevronRight,
   List,
   BarChart2,
-  PieChart,
   Download,
-  Loader2,
-  Table
+  Loader2
 } from 'lucide-react';
 
 /**
@@ -212,12 +207,41 @@ const TradeAnalyzer = () => {
     const consolidatedRows = [...Array.from(orderMap.values()), ...standaloneRows];
     consolidatedRows.sort((a, b) => a.rawDate - b.rawDate);
 
+    // --- LOGIC UPDATE START ---
+    
+    // 1. Identify "Sell-Only" Symbols (Expired Options)
+    const symbolsWithBuys = new Set();
+    consolidatedRows.forEach(row => {
+        if (row.type.includes('buy')) {
+            symbolsWithBuys.add(row.symbol);
+        }
+    });
+
     const positions = {}; 
     const realizedTrades = [];
 
     consolidatedRows.forEach(row => {
       const { symbol, type, qty, price, rawDate } = row;
       
+      const isSellOnlySymbol = !symbolsWithBuys.has(symbol);
+
+      // SPECIAL CASE: Symbol has NO buys at all. Treat as "Expired OTM Option".
+      // We assume it was bought at 0.
+      if (isSellOnlySymbol && type.includes('sell')) {
+          realizedTrades.push({
+            id: `realized_${row.id}_sell_only_${Math.random()}`,
+            date: rawDate,
+            symbol: symbol,
+            pnl: (price - 0) * qty, // Full value is profit
+            quantity: qty,
+            closePrice: price,
+            openPrice: 0,
+            type: 'Sell (Expired)'
+          });
+          return; // Skip standard processing
+      }
+
+      // STANDARD LOGIC (FIFO/Average) for symbols that have matching buys/sells
       if (!positions[symbol]) positions[symbol] = { qty: 0, avgPrice: 0 };
       const pos = positions[symbol];
 
@@ -226,12 +250,14 @@ const TradeAnalyzer = () => {
       const isBuy = type.includes('buy');
       const isSell = type.includes('sell');
 
+      // Check if trade increases position (Long Buy OR Short Sell)
       if ((pos.qty === 0) || (isLong && isBuy) || (isShort && isSell)) {
         const totalValue = (Math.abs(pos.qty) * pos.avgPrice) + (qty * price);
         const totalQty = Math.abs(pos.qty) + qty;
-        pos.avgPrice = totalValue / totalQty;
+        pos.avgPrice = totalQty > 0 ? totalValue / totalQty : 0;
         pos.qty += isBuy ? qty : -qty;
       } 
+      // Trade reduces position (Long Sell OR Short Buy)
       else {
         const qtyToClose = Math.min(Math.abs(pos.qty), qty);
         const remainingOrderQty = qty - qtyToClose;
@@ -245,17 +271,20 @@ const TradeAnalyzer = () => {
           pos.qty += qtyToClose;
         }
 
-        realizedTrades.push({
-          id: `realized_${row.id}_${Math.random()}`,
-          date: rawDate,
-          symbol: symbol,
-          pnl: tradePnL,
-          quantity: qtyToClose,
-          closePrice: price,
-          openPrice: pos.avgPrice,
-          type: isBuy ? 'Short Cover' : 'Long Close'
-        });
+        if (qtyToClose > 0) {
+            realizedTrades.push({
+            id: `realized_${row.id}_${Math.random()}`,
+            date: rawDate,
+            symbol: symbol,
+            pnl: tradePnL,
+            quantity: qtyToClose,
+            closePrice: price,
+            openPrice: pos.avgPrice,
+            type: isBuy ? 'Short Cover' : 'Long Close'
+            });
+        }
 
+        // If flipped position (e.g. Long 50 -> Sell 100 = Short 50)
         if (remainingOrderQty > 0) {
           pos.qty = isBuy ? remainingOrderQty : -remainingOrderQty;
           pos.avgPrice = price;
@@ -264,6 +293,7 @@ const TradeAnalyzer = () => {
         }
       }
     });
+    // --- LOGIC UPDATE END ---
 
     return realizedTrades;
   };
@@ -871,11 +901,11 @@ const TradeAnalyzer = () => {
             </div>
           </div>
           {trades.length > 0 && (
-            <div className="flex gap-3">
+            <div className="flex gap-3 no-export">
               <button 
                 onClick={handleExportPDF}
                 disabled={exporting}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg shadow-sm disabled:opacity-75 disabled:cursor-not-allowed transition-colors"
+                className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-white border border-slate-800 rounded-lg text-sm font-medium hover:bg-slate-700 transition-colors shadow-sm disabled:opacity-75 disabled:cursor-not-allowed"
               >
                 {exporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
                 {exporting ? 'Generating...' : 'Export PDF'}
@@ -883,7 +913,7 @@ const TradeAnalyzer = () => {
               <button 
                 onClick={resetData}
                 disabled={exporting}
-                className="flex items-center gap-2 px-4 py-2 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-sm font-medium rounded-lg shadow-sm disabled:opacity-75 transition-colors"
+                className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors shadow-sm disabled:opacity-75"
               >
                 <Upload size={16} /> Upload New File
               </button>
@@ -943,7 +973,7 @@ const TradeAnalyzer = () => {
                       onClick={(e) => { e.stopPropagation(); handleDownloadTemplate(); }}
                       className="mt-2 flex items-center justify-center gap-2 mx-auto px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium transition-colors border border-slate-200 relative z-20 cursor-pointer"
                     >
-                      <Table size={14} /> Download CSV Template
+                      <FileText size={14} /> Download CSV Template
                     </button>
                   </div>
                 </div>
